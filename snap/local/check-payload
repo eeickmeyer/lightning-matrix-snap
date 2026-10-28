@@ -1,0 +1,81 @@
+#!/bin/sh
+# Fails the build when the primed payload lacks something the app only needs at
+# run time. Nothing else would notice: a snap missing any of these installs
+# cleanly and then fails inside confinement, where the build host's own copies
+# are not visible and `ldd` therefore reports nothing unresolved.
+#
+# Usage: check-payload <prime-dir>
+set -eu
+prime="${1:?usage: check-payload <prime-dir>}"
+failed=0
+
+fail() { echo "check-payload: $*" >&2; failed=1; }
+
+# A file whose path ends in $1 exists somewhere in the payload.
+need() {
+    if ! find -L "$prime" -path "*$1" 2>/dev/null | grep -q .; then
+        fail "missing: $1 ($2)"
+    fi
+}
+# No file whose path ends in $1 exists in the payload.
+forbid() {
+    if find -L "$prime" -path "*$1" 2>/dev/null | grep -q .; then
+        fail "present but forbidden: $1 ($2)"
+    fi
+}
+
+need usr/bin/lightning-matrix "the application"
+need usr/bin/lightning-updater "the update helper"
+
+# Qt platform and plugin set. The portal theme matters most: without it Qt
+# Quick's own file dialog runs and confinement shows it an empty home.
+need platforms/libqxcb.so "X11 session"
+need platforms/libqwayland*.so "Wayland session"
+need wayland-shell-integration/libxdg-shell.so "Wayland window placement"
+need platformthemes/libqxdgdesktopportal.so "file dialogs through the portal"
+need tls/libqopensslbackend.so "TLS for every network request"
+need sqldrivers/libqsqlite.so "the local cache"
+need imageformats/libqwebp.so "WebP images"
+need imageformats/kimg_jxl.so "JPEG XL images"
+need multimedia/*.so "the Qt Multimedia backend for inline playback"
+# SVG from the network must never be decoded (docs/threat-model.md).
+forbid imageformats/libqsvg.so "untrusted SVG must not render"
+
+# Call media engine. Plugins an element loads for itself are named explicitly:
+# a plugin count would be satisfied by the wrong ones.
+need gstreamer1.0/gstreamer-1.0/gst-plugin-scanner "without it every launch scans in-process"
+for plugin in webrtc nice srtp dtls sctp opus vpx rtp rtpmanager \
+              videoconvertscale audioconvert audioresample app level \
+              pipewire video4linux2 ximagesrc pulseaudio alsa; do
+    need "gstreamer-1.0/libgst$plugin.so" "call media: $plugin"
+done
+# libsrtp2 links NSS, which dlopens these from a path derived at run time.
+need libsoftokn3.so "libsrtp2 cannot initialise without NSS softokn"
+need libfreebl3.so "libsrtp2 cannot initialise without NSS freebl"
+
+# The PipeWire client stack the launcher points libpipewire at.
+need spa-0.2/support/libspa-support.so "pipewiresrc"
+need pipewire-0.3/libpipewire-module-protocol-native.so "pipewiresrc"
+need usr/share/pipewire/client.conf "pipewiresrc"
+
+# Spell checking: the confined app sees neither the host's enchant nor its
+# dictionaries.
+need libhunspell-1.7.so.0 "spell checking"
+need hunspell/en_US.dic "spell checking dictionary"
+
+# Qt QML modules the UI imports.
+for module in QtQuick/Controls QtQuick/Layouts QtQuick/Dialogs \
+              QtQuick/Shapes QtQuick/Effects QtQuick/Window QtMultimedia; do
+    need "qt6/qml/$module/qmldir" "QML module $module"
+done
+
+# Confined-data staging, which the base snap lacks.
+need usr/share/mime/mime.cache "MIME database"
+need usr/share/X11/xkb/rules/evdev.xml "xkb keymaps"
+need etc/fonts/fonts.conf "fontconfig"
+
+if [ "$failed" -ne 0 ]; then
+    echo "check-payload: the snap payload is incomplete" >&2
+    exit 1
+fi
+echo "check-payload: payload complete"

@@ -1,0 +1,7 @@
+*.snap
+/parts/
+/prime/
+/stage/
+/snap/.snapcraft/
+/*_amd64.txt
+/*_arm64.txt

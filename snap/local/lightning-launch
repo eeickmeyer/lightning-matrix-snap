@@ -1,0 +1,88 @@
+#!/bin/sh
+# Points Qt, GStreamer and PipeWire at the libraries staged under $SNAP, then
+# starts Lightning. Each export below fixes a failure measured on the upstream
+# project's own snap under a real snapd.
+set -e
+: "${SNAP:?lightning-launch must run inside a snap environment}"
+
+case "$(uname -m)" in
+    x86_64)  triplet=x86_64-linux-gnu ;;
+    aarch64) triplet=aarch64-linux-gnu ;;
+    *) echo "lightning-launch: unsupported architecture $(uname -m)" >&2; exit 1 ;;
+esac
+lib="$SNAP/usr/lib/$triplet"
+
+# NSS (libsoftokn3, libfreebl3) sits beside the other libraries: libsrtp2 is
+# built against it and NSS dlopens them, so without them srtpenc cannot start
+# and no call carries media.
+# No empty element: the loader reads one as the current directory.
+export LD_LIBRARY_PATH="$lib:$SNAP/lib/$triplet:$SNAP/usr/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+
+# Qt's compiled-in paths point at the build host's /usr.
+export QT_PLUGIN_PATH="$lib/qt6/plugins"
+export QML_IMPORT_PATH="$lib/qt6/qml"
+export QML2_IMPORT_PATH="$lib/qt6/qml"
+
+# First, so the staged MIME database is the one Qt reads; without it every file
+# is application/octet-stream and a picture is sent as a file.
+export XDG_DATA_DIRS="$SNAP/usr/share:${XDG_DATA_DIRS:-/usr/share}"
+
+# Both spellings, so a host value cannot win. One path, not a list.
+export GST_PLUGIN_SYSTEM_PATH_1_0="$lib/gstreamer-1.0"
+export GST_PLUGIN_PATH_1_0="$lib/gstreamer-1.0"
+export GST_PLUGIN_SCANNER_1_0="$lib/gstreamer1.0/gstreamer-1.0/gst-plugin-scanner"
+export GST_PLUGIN_SCANNER="$GST_PLUGIN_SCANNER_1_0"
+# $SNAP is read-only and changes on refresh: keep the registry in the cache.
+export GST_REGISTRY_1_0="${XDG_CACHE_HOME:-$HOME/.cache}/lightning/gst-registry.bin"
+mkdir -p "$(dirname "$GST_REGISTRY_1_0")" 2>/dev/null || true
+
+# libpipewire looks for its plugins and client.conf at the build host's paths;
+# without these pipewiresrc (portal camera and screen share) cannot start.
+export SPA_PLUGIN_DIR="$lib/spa-0.2"
+export PIPEWIRE_MODULE_DIR="$lib/pipewire-0.3"
+export PIPEWIRE_CONFIG_DIR="$SNAP/usr/share/pipewire"
+
+# The base snap has no fontconfig configuration or xkb keymaps and the app
+# crashes without them. Fonts come from the host through the desktop interface.
+export FONTCONFIG_PATH="$SNAP/etc/fonts"
+export FONTCONFIG_FILE="$SNAP/etc/fonts/fonts.conf"
+export XKB_CONFIG_ROOT="$SNAP/usr/share/X11/xkb"
+
+# snapd moves XDG_RUNTIME_DIR one level down, so link the session's Wayland,
+# PipeWire and PulseAudio sockets into it. Best effort: a missing socket only
+# loses that feature.
+bridge_runtime_entry() {
+    # $1: a path in the real runtime dir, e.g. "pulse/native".
+    [ -n "${XDG_RUNTIME_DIR:-}" ] || return 0
+    case "$1" in
+        # One level of nesting at most; deeper would link to the wrong place.
+        */*/*) return 0 ;;
+        */*) _bre_dir="${1%/*}"; _bre_up="../../" ;;
+        *)   _bre_dir=""; _bre_up="../" ;;
+    esac
+    [ -e "$XDG_RUNTIME_DIR/$1" ] && return 0
+    if [ -n "$_bre_dir" ]; then
+        mkdir -p "$XDG_RUNTIME_DIR/$_bre_dir" 2>/dev/null || return 0
+    else
+        mkdir -p "$XDG_RUNTIME_DIR" 2>/dev/null || return 0
+    fi
+    ln -sf "$_bre_up$1" "$XDG_RUNTIME_DIR/$1" 2>/dev/null || true
+}
+# A WAYLAND_DISPLAY holding a path is not bridged.
+case "${WAYLAND_DISPLAY:-}" in
+    "") : ;;
+    */*) : ;;
+    *) bridge_runtime_entry "$WAYLAND_DISPLAY" ;;
+esac
+bridge_runtime_entry "pipewire-0"
+bridge_runtime_entry "pulse/native"
+
+# GPU drivers come from the gpu-2604 content snap. Without it the app still
+# starts, on a software renderer that cannot draw call video.
+if [ -x "$SNAP/gpu-2604/bin/gpu-2604-provider-wrapper" ]; then
+    exec "$SNAP/bin/gpu-2604-wrapper" "$SNAP/usr/bin/lightning-matrix" --backend=rust "$@"
+fi
+echo "lightning-launch: gpu-2604 is not connected; using software rendering." >&2
+echo "  sudo snap install mesa-2604" >&2
+echo "  sudo snap connect ${SNAP_INSTANCE_NAME:-lightning-matrix}:gpu-2604 mesa-2604:gpu-2604" >&2
+exec "$SNAP/usr/bin/lightning-matrix" --backend=rust "$@"

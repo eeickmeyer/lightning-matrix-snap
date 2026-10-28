@@ -1,0 +1,273 @@
+name: lightning-matrix
+title: Lightning
+base: core26
+adopt-info: lightning
+summary: Native Matrix desktop client
+description: |
+  Lightning is a desktop messenger for Matrix, the open network for secure,
+  decentralised communication. It is written in C++ and Qt 6 and uses the
+  official Matrix Rust SDK for networking and end-to-end encryption.
+
+  Features include several accounts at once, Spaces, rooms and threads,
+  end-to-end encrypted rooms with device verification and key backup, a local
+  search index that never leaves the computer, and group voice calls and
+  screen sharing built on GStreamer.
+
+  Hardware graphics come from the mesa-2604 content snap. If it is not
+  connected automatically, run:
+
+    sudo snap install mesa-2604
+    sudo snap connect lightning-matrix:gpu-2604 mesa-2604:gpu-2604
+
+  Calls also need the microphone and camera interfaces:
+
+    sudo snap connect lightning-matrix:audio-record
+    sudo snap connect lightning-matrix:camera
+license: GPL-3.0-or-later
+website: https://www.lightning-matrix.org
+source-code: https://github.com/Mizerd/lightning
+issues: https://github.com/Mizerd/lightning/issues
+icon: snap/gui/lightning-matrix.png
+grade: stable
+confinement: strict
+
+platforms:
+  amd64:
+  arm64:
+
+apps:
+  lightning-matrix:
+    command: bin/lightning-launch
+    plugs:
+      - network
+      - network-bind
+      - wayland
+      - x11
+      - desktop
+      - desktop-legacy
+      - opengl
+      - audio-playback
+      # The microphone; audio-playback covers output only.
+      - audio-record
+      # v4l2src opens /dev/video* directly. Screen sharing goes through the
+      # portal, which the `desktop` interface reaches.
+      - camera
+      # Access token storage through libsecret.
+      - password-manager-service
+      - gpu-2604
+    # MPRIS for the voice player (media keys, desktop "now playing").
+    slots:
+      - mpris
+
+slots:
+  mpris:
+    interface: mpris
+    # The application owns org.mpris.MediaPlayer2.lightning; snapd would
+    # otherwise derive the allowed name from the snap name.
+    name: lightning
+
+plugs:
+  gpu-2604:
+    interface: content
+    target: $SNAP/gpu-2604
+    default-provider: mesa-2604
+
+parts:
+  lightning:
+    plugin: nil
+    source: https://github.com/Mizerd/lightning.git
+    source-type: git
+    # Bump this to follow a new upstream release; adopt-info derives the snap
+    # version from it.
+    source-tag: v0.10.1
+    build-packages:
+      - cargo
+      - cmake
+      - g++
+      - git
+      - libgstreamer-plugins-bad1.0-dev
+      - libgstreamer-plugins-base1.0-dev
+      - libgstreamer1.0-dev
+      - libsecret-1-dev
+      - libssl-dev
+      - ninja-build
+      - patchelf
+      - pkgconf
+      - qt6-base-dev
+      - qt6-base-private-dev
+      - qt6-declarative-dev
+      - qt6-declarative-dev-tools
+      - qt6-l10n-tools
+      - qt6-multimedia-dev
+      - qt6-svg-dev
+      - qt6-tools-dev
+      - rustc
+      - zlib1g-dev
+    override-pull: |
+      craftctl default
+      tag="$(git describe --tags --abbrev=0)"
+      craftctl set version="${tag#v}"
+    override-build: |
+      set -eu
+      build_dir="${CRAFT_PART_BUILD}/build-snap"
+
+      # CMake runs cargo with --offline --locked, so every crate has to be
+      # fetched first.
+      export CARGO_HOME="${CRAFT_PART_BUILD}/cargo-home"
+      export CARGO_BUILD_JOBS="${CRAFT_PARALLEL_BUILD_COUNT}"
+      cargo fetch --locked --manifest-path rust/Cargo.toml
+
+      # DeepFilterNet and RNNoise are off because their model weights carry no
+      # explicit licence (the Debian package disables them for the same
+      # reason). The WebRTC and Qt SVG requirements turn a missing dependency
+      # into a configure error instead of a silently reduced build. No GIF
+      # provider keys are embedded; the GIF picker reads them from
+      # LIGHTNING_GIPHY_API_KEY / LIGHTNING_KLIPY_API_KEY and is otherwise
+      # unconfigured. The update helper defers to snapd for linux-snap.
+      cmake -S . -B "${build_dir}" -G Ninja \
+        -DCMAKE_BUILD_TYPE=Release \
+        -DCMAKE_INSTALL_PREFIX=/usr \
+        -DBUILD_TESTING=OFF \
+        -DENABLE_RUST_SDK_BACKEND=ON \
+        -DLIGHTNING_RUST_ONLY=ON \
+        -DLIGHTNING_ENABLE_WEBRTC=ON \
+        -DLIGHTNING_REQUIRE_WEBRTC=ON \
+        -DLIGHTNING_REQUIRE_QT_SVG=ON \
+        -DLIGHTNING_ENABLE_DEEPFILTERNET=OFF \
+        -DLIGHTNING_ENABLE_RNNOISE=OFF \
+        -DLIGHTNING_DISABLE_CCACHE=ON \
+        -DLIGHTNING_ARTIFACT_KIND=release \
+        -DLIGHTNING_INSTALL_TYPE=linux-snap \
+        -DLIGHTNING_UPDATE_PUBKEY_2026A=pnNX0yQfhr66fpbMJ89MCNWkHVtfAr+WwI9c4OHzz50=
+      cmake --build "${build_dir}" --parallel "${CRAFT_PARALLEL_BUILD_COUNT}"
+      DESTDIR="${CRAFT_PART_INSTALL}" cmake --install "${build_dir}"
+
+      # The staged binary must be the Rust-only release build with the call
+      # media engine compiled in; a missing GStreamer development package
+      # would otherwise ship a client whose calls are silently compiled out.
+      staged="${CRAFT_PART_INSTALL}/usr/bin/lightning-matrix"
+      export QT_QPA_PLATFORM=offscreen
+      "${staged}" --version
+      info="$("${staged}" --build-info)"
+      printf '%s\n' "${info}"
+      printf '%s\n' "${info}" | grep -qx 'matrix_backend: rust'
+      printf '%s\n' "${info}" | grep -qx 'http_backend_compiled: false'
+      printf '%s\n' "${info}" | grep -qx 'mock_backend_compiled: false'
+      media="$(timeout 60 "${staged}" --call-media-status 2>&1 || true)"
+      printf '%s\n' "${media}"
+      printf '%s\n' "${media}" | grep -qx 'call media engine built in: yes'
+
+      # The libraries come from stage-packages, never from the build tree.
+      patchelf --remove-rpath "${CRAFT_PART_INSTALL}/usr/bin/lightning-matrix"
+      patchelf --remove-rpath "${CRAFT_PART_INSTALL}/usr/bin/lightning-updater"
+
+      install -Dm0644 LICENSE \
+        "${CRAFT_PART_INSTALL}/usr/share/doc/lightning-matrix/LICENSE"
+      install -Dm0644 README.md \
+        "${CRAFT_PART_INSTALL}/usr/share/doc/lightning-matrix/README.md"
+
+  # Everything the application loads at run time. Strict confinement hides the
+  # host's /usr, and the base snap carries none of it.
+  runtime:
+    plugin: nil
+    stage-packages:
+      # Qt: the QML modules the UI imports, plus the plugins the build links
+      # but Qt loads itself. libqt6sql6-sqlite is only a Recommends of
+      # libqt6sql6, and the local cache needs it.
+      - kimageformat6-plugins
+      - libqt6sql6-sqlite
+      - qml6-module-qtmultimedia
+      - qml6-module-qtquick
+      - qml6-module-qtquick-controls
+      - qml6-module-qtquick-dialogs
+      - qml6-module-qtquick-effects
+      - qml6-module-qtquick-layouts
+      - qml6-module-qtquick-shapes
+      - qml6-module-qtquick-window
+      - qt6-image-formats-plugins
+      - qt6-wayland
+      - qt6-xdgdesktopportal-platformtheme
+      # Voice calls, screen sharing and the camera.
+      - gstreamer1.0-alsa
+      - gstreamer1.0-gl
+      - gstreamer1.0-nice
+      - gstreamer1.0-pipewire
+      - gstreamer1.0-plugins-bad
+      - gstreamer1.0-plugins-base
+      - gstreamer1.0-plugins-good
+      - libpipewire-0.3-modules
+      # pipewire-bin owns /usr/share/pipewire/client.conf, which libpipewire
+      # reads; its daemon and tools are not wanted (see `stage`).
+      - pipewire-bin
+      - libspa-0.2-modules
+      # libsrtp2 is built against NSS, which dlopens libsoftokn3 and libfreebl3.
+      - libnss3
+      # Token storage, and the spelling dictionary the confined app can see.
+      - hunspell-en-us
+      - libhunspell-1.7-0
+      - libsecret-1-0
+    stage:
+      # Qt's SVG image plugin would decode untrusted SVG from the network; the
+      # application rasterises only SVGs the user picks, through the library.
+      - -usr/lib/*/qt6/plugins/imageformats/libqsvg.so
+      - -usr/bin/pipewire*
+      - -usr/bin/pw-*
+      - -usr/bin/spa-*
+
+  # The base snap has no MIME database, xkb keymaps or fontconfig rules. The
+  # package files alone are not enough: the MIME cache is generated by a
+  # trigger and the fontconfig rules are symlinks into conf.avail.
+  confined-data:
+    plugin: nil
+    build-packages:
+      - shared-mime-info
+    stage-packages:
+      - fontconfig-config
+      - shared-mime-info
+      - xkb-data
+    override-prime: |
+      set -eu
+      craftctl default
+      update-mime-database "${CRAFT_PRIME}/usr/share/mime"
+      for rule in "${CRAFT_PRIME}"/etc/fonts/conf.d/*.conf; do
+        [ -L "${rule}" ] || continue
+        target="${CRAFT_PRIME}/usr/share/fontconfig/conf.avail/$(basename "$(readlink "${rule}")")"
+        [ -f "${target}" ]
+        rm "${rule}"
+        cp "${target}" "${rule}"
+      done
+      # Assert the rules the app depends on, not just that some exist.
+      for rule in 45-generic.conf 60-latin.conf 70-no-bitmaps-except-emoji.conf; do
+        [ -f "${CRAFT_PRIME}/etc/fonts/conf.d/${rule}" ]
+      done
+      [ "$(find "${CRAFT_PRIME}/etc/fonts/conf.d" -name '*.conf' | wc -l)" -ge 20 ]
+      [ -z "$(find "${CRAFT_PRIME}/etc/fonts" -xtype l)" ]
+
+  # Graphics come from the mesa-2604 content snap. This removes any library
+  # the provider supplies from the payload so the two cannot disagree.
+  gpu-2604:
+    after: [lightning, runtime, confined-data]
+    plugin: dump
+    source: https://github.com/canonical/gpu-snap.git
+    override-prime: |
+      set -eu
+      craftctl default
+      "${CRAFT_PART_SRC}/bin/gpu-2604-cleanup" mesa-2604
+      # Mount points for the content interface. Without them snapd lays a
+      # writable tmpfs over the whole of $SNAP to create them.
+      mkdir -p "${CRAFT_PRIME}/gpu-2604" "${CRAFT_PRIME}/gpu-2604-2"
+    prime:
+      - bin/gpu-2604-wrapper
+
+  launcher:
+    after: [gpu-2604]
+    plugin: dump
+    source: snap/local
+    organize:
+      lightning-launch: bin/lightning-launch
+    prime:
+      - bin/lightning-launch
+    override-prime: |
+      set -eu
+      craftctl default
+      sh "${CRAFT_PART_SRC}/check-payload" "${CRAFT_PRIME}"
