@@ -67,10 +67,3 @@ dependencies, mirror `Build-Depends` and `Depends` from upstream's
   (Qt plugins, GStreamer call plugins, NSS modules, PipeWire client files,
   dictionaries) is missing from the payload, since a strictly confined snap
   cannot see the build host's copies.
-
-## Status
-
-Written against Ubuntu 26.04's package set (every package name checked against
-the `resolute` archive) but **not yet built or run**. Confinement behaviour
-(audio, camera, portals, secret service, tray, mic and screen share) needs a
-real snapd and live calls.
