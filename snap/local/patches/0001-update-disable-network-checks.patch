@@ -1,0 +1,335 @@
+Description: Disable the in-app update checker
+ snapd owns updates for this snap through the Snap Store, and this
+ build must never contact an outside host on its own. UpdateManager::
+ startCheck() is the single chokepoint every check and download leads back
+ to: checkForUpdates() (the manual action), maybeCheckAutomatically() (the
+ startup timer) and downloadUpdate() (gated on reaching the UpdateAvailable
+ state, itself only reachable from a successful check) all go through it.
+ Refusing there unconditionally, ahead of its own development-build and
+ trust-key gates, disables every path at once, including the
+ LIGHTNING_ALLOW_DEV_UPDATE_CHECK diagnostic override.
+ .
+ Also adds UpdateManager::checksDisabledByPolicy (reading the same
+ kChecksDisabledByPolicy flag startCheck() refuses from) and uses it in
+ qml/UpdatesSettingsSection.qml to replace the "Automatic checks" toggle
+ and the "Check for updates" button with a fixed notice, and to hide every
+ check-result state in the "Status" card (Idle/Checking/UpToDate/
+ UpdateAvailable/Downloading/Verifying/ReadyToInstall/Installing/
+ RestartRequired/Failed). Without this, the automatic startup timer still
+ flips the backend to Failed every launch (harmlessly, with no network
+ involved) and the pane would show that as an alarming, misleading error
+ banner. updateLastResultBlock (the previous install's outcome, from the
+ helper's status file) is unrelated to checking and is left alone.
+Author: Erich Eickmeyer <eeickmeyer@ubuntu.com>
+Forwarded: not-needed
+Last-Update: 2026-10-23
+
+Index: lightning-0.10.1/src/update/UpdateManager.cpp
+===================================================================
+--- lightning-0.10.1.orig/src/update/UpdateManager.cpp
++++ lightning-0.10.1/src/update/UpdateManager.cpp
+@@ -45,6 +45,11 @@ constexpr char kSettingDismissedVersion[
+ // manifest's self-declared `channel`, which the guarded document could change.
+ constexpr bool kOffersPrereleases = false;
+ 
++// Snap: this snap's updates come from the Snap Store. startCheck()
++// and checksDisabledByPolicy() both read this single flag, so the backend
++// refusal and the UI notice can never say different things.
++constexpr bool kChecksDisabledByPolicy = true;
++
+ // Status written by both the helper and the application when the staged file
+ // no longer matches the signed digest; one spelling for both.
+ constexpr char kDigestMismatchStatus[] = "artifact-digest-mismatch";
+@@ -324,23 +329,20 @@ void UpdateManager::startCheck(bool auto
+     setStatusDetail({});
+     m_handoffSummary.clear();
+ 
+-    if (m_detection.type == InstallType::Development && !m_detection.developmentCheckAllowed) {
++    // Snap: this snap's updates come from the Snap Store, not from
++    // an upstream server, so a check must never run here, under any install
++    // type or the LIGHTNING_ALLOW_DEV_UPDATE_CHECK diagnostic override.
++    // Every network fetch in this file is reached only from here down, so
++    // this single, unconditional refusal is enough to keep this build from
++    // ever contacting an outside host on its own. (kChecksDisabledByPolicy
++    // is always true here; the `if` just keeps this read from the same flag
++    // checksDisabledByPolicy() exposes to the UI, rather than a bare true.)
++    if (kChecksDisabledByPolicy) {
+         failWith(QStringLiteral(
+-            "This is a development build; set LIGHTNING_ALLOW_DEV_UPDATE_CHECK=1 to check "
+-            "for updates. Installation stays disabled."));
++            "Updates for this snap come from the Snap Store. Use your software "
++            "centre or run 'snap refresh'."));
+         return;
+     }
+-    if (m_trust == &m_compiledTrust && !hasUsableTrustedKey()) {
+-        failWith(QStringLiteral(
+-            "This build has no update signing key compiled in, so an update could not be "
+-            "verified. Please update manually."));
+-        return;
+-    }
+-
+-    setState(Checking);
+-    m_signatureDocument.clear();
+-    m_metadataInFallbackStage = false;
+-    fetchSignature();
+ }
+ 
+ void UpdateManager::fetchSignature()
+@@ -1327,6 +1329,11 @@ bool UpdateManager::installNeedsAdminist
+             || m_detection.type == InstallType::WindowsSetup);
+ }
+ 
++bool UpdateManager::checksDisabledByPolicy() const
++{
++    return kChecksDisabledByPolicy;
++}
++
+ QString UpdateManager::installTargetPath() const
+ {
+     switch (m_detection.type) {
+Index: lightning-0.10.1/qml/UpdatesSettingsSection.qml
+===================================================================
+--- lightning-0.10.1.orig/qml/UpdatesSettingsSection.qml
++++ lightning-0.10.1/qml/UpdatesSettingsSection.qml
+@@ -31,6 +31,8 @@ ColumnLayout {
+     readonly property string installType: root.um ? root.um.installType : ""
+     readonly property bool isDevOrUnknown:
+         root.installType === "development" || root.installType === "unknown"
++    readonly property bool checksDisabledByPolicy:
++        root.um ? (root.um.checksDisabledByPolicy === true) : false
+     // One definition of "a check has ever run", shared by the "Last checked"
+     // row and the Idle status so they agree. Idle is also the state after a
+     // restart until a check runs, while lastCheckTime persists; an unset
+@@ -164,6 +166,7 @@ ColumnLayout {
+             RowLayout {
+                 Layout.fillWidth: true
+                 spacing: AppTheme.spacing12
++                visible: !root.checksDisabledByPolicy
+                 Label {
+                     Layout.fillWidth: true
+                     wrapMode: Text.WordWrap
+@@ -184,8 +187,27 @@ ColumnLayout {
+                     }
+                 }
+             }
++            // Snap: checksDisabledByPolicy is always true here (see
++            // UpdateManager::startCheck()), so this one notice replaces the
++            // toggle, the "Last checked" row, the check button and the
++            // dev-build notice below, none of which would ever do anything.
++            Label {
++                objectName: "updateChecksDisabledNotice"
++                visible: root.checksDisabledByPolicy
++                Layout.fillWidth: true
++                wrapMode: Text.WordWrap
++                lineHeight: AppTheme.lineHeightBody
++                lineHeightMode: Text.ProportionalHeight
++                color: AppTheme.stormTextMuted
++                font.pixelSize: AppTheme.textMeta
++                text: qsTr("Update checks are disabled in this build. "
++                           + "Updates for this snap come from the Snap "
++                           + "Store; use your software centre or run "
++                           + "'snap refresh'.")
++            }
+             Label {
+                 objectName: "updateAutomaticChecksCaption"
++                visible: !root.checksDisabledByPolicy
+                 Layout.fillWidth: true
+                 wrapMode: Text.WordWrap
+                 lineHeight: AppTheme.lineHeightBody
+@@ -207,7 +229,7 @@ ColumnLayout {
+                 objectName: "updateLastCheckedLabel"
+                 // An unset lastCheckTime is Invalid Date; same idiom as the
+                 // Sessions "last seen" row.
+-                visible: root.everChecked
++                visible: !root.checksDisabledByPolicy && root.everChecked
+                 Layout.fillWidth: true
+                 wrapMode: Text.WordWrap
+                 lineHeight: AppTheme.lineHeightBody
+@@ -223,6 +245,7 @@ ColumnLayout {
+             AppButton {
+                 storm: true
+                 objectName: "updateCheckNowButton"
++                visible: !root.checksDisabledByPolicy
+                 text: root.um && root.um.state === UpdateManager.Checking
+                       ? qsTr("Checking…") : qsTr("Check for updates")
+                 enabled: root.um
+@@ -232,7 +255,7 @@ ColumnLayout {
+             }
+             Label {
+                 objectName: "updateDevBuildNotice"
+-                visible: root.isDevOrUnknown
++                visible: !root.checksDisabledByPolicy && root.isDevOrUnknown
+                 Layout.fillWidth: true
+                 wrapMode: Text.WordWrap
+                 lineHeight: AppTheme.lineHeightBody
+@@ -267,8 +290,10 @@ ColumnLayout {
+                 objectName: "updateStatusDetailLabel"
+                 // startInstall() copies its handoff summary into statusDetail,
+                 // and the restart block binds that summary, so hide it here in
+-                // RestartRequired.
+-                visible: root.um && root.um.statusDetail
++                // RestartRequired. Snap: checksDisabledByPolicy means
++                // a check never reaches this far, so statusDetail never gets
++                // set; gated anyway for consistency with the rest of this card.
++                visible: !root.checksDisabledByPolicy && root.um && root.um.statusDetail
+                          && root.um.statusDetail.length > 0
+                          && root.um.statusDetail !== root.um.handoffSummary
+                 Layout.fillWidth: true
+@@ -287,7 +312,7 @@ ColumnLayout {
+             // triggering button; shown and dismissible.
+             RowLayout {
+                 objectName: "updateInstallRefusedBlock"
+-                visible: root.installRefusedReason.length > 0
++                visible: !root.checksDisabledByPolicy && root.installRefusedReason.length > 0
+                 Layout.fillWidth: true
+                 spacing: AppTheme.spacing8
+                 Label {
+@@ -309,7 +334,7 @@ ColumnLayout {
+ 
+             Label {
+                 objectName: "updateIdleLabel"
+-                visible: root.um && root.um.state === UpdateManager.Idle
++                visible: !root.checksDisabledByPolicy && root.um && root.um.state === UpdateManager.Idle
+                 Layout.fillWidth: true
+                 wrapMode: Text.WordWrap
+                 lineHeight: AppTheme.lineHeightBody
+@@ -323,9 +348,24 @@ ColumnLayout {
+                       : qsTr("Updates haven't been checked yet.")
+             }
+ 
++            // Snap: say so rather than leave the "Status" heading
++            // over nothing, the same idea as updateFailureDismissedNote below.
++            Label {
++                objectName: "updateChecksDisabledStatusNote"
++                visible: root.checksDisabledByPolicy
++                         && root.um && root.um.lastUpdateResult === UpdateManager.NoResult
++                Layout.fillWidth: true
++                wrapMode: Text.WordWrap
++                lineHeight: AppTheme.lineHeightBody
++                lineHeightMode: Text.ProportionalHeight
++                color: AppTheme.stormTextMuted
++                text: qsTr("Nothing to report: update checks are disabled "
++                           + "in this build.")
++            }
++
+             RowLayout {
+                 objectName: "updateCheckingBlock"
+-                visible: root.um && root.um.state === UpdateManager.Checking
++                visible: !root.checksDisabledByPolicy && root.um && root.um.state === UpdateManager.Checking
+                 spacing: AppTheme.spacing8
+                 AppProgressBar {
+                     indeterminate: true
+@@ -339,7 +379,7 @@ ColumnLayout {
+ 
+             Label {
+                 objectName: "updateUpToDateLabel"
+-                visible: root.um && root.um.state === UpdateManager.UpToDate
++                visible: !root.checksDisabledByPolicy && root.um && root.um.state === UpdateManager.UpToDate
+                 color: AppTheme.stormSuccess
+                 font.weight: AppTheme.weightStrong
+                 text: qsTr("Lightning is up to date.")
+@@ -349,7 +389,7 @@ ColumnLayout {
+             ColumnLayout {
+                 id: availableBlock
+                 objectName: "updateAvailableBlock"
+-                visible: root.um && root.um.state === UpdateManager.UpdateAvailable
++                visible: !root.checksDisabledByPolicy && root.um && root.um.state === UpdateManager.UpdateAvailable
+                 Layout.fillWidth: true
+                 spacing: AppTheme.spacing8
+ 
+@@ -480,7 +520,7 @@ ColumnLayout {
+             // Downloading
+             ColumnLayout {
+                 objectName: "updateDownloadingBlock"
+-                visible: root.um && root.um.state === UpdateManager.Downloading
++                visible: !root.checksDisabledByPolicy && root.um && root.um.state === UpdateManager.Downloading
+                 Layout.fillWidth: true
+                 spacing: AppTheme.spacing8
+                 Label {
+@@ -514,7 +554,7 @@ ColumnLayout {
+             // Verifying (indeterminate)
+             RowLayout {
+                 objectName: "updateVerifyingBlock"
+-                visible: root.um && root.um.state === UpdateManager.Verifying
++                visible: !root.checksDisabledByPolicy && root.um && root.um.state === UpdateManager.Verifying
+                 spacing: AppTheme.spacing8
+                 AppProgressBar {
+                     indeterminate: true
+@@ -533,7 +573,7 @@ ColumnLayout {
+             // own next quit.
+             ColumnLayout {
+                 objectName: "updateReadyToInstallBlock"
+-                visible: root.um && root.um.state === UpdateManager.ReadyToInstall
++                visible: !root.checksDisabledByPolicy && root.um && root.um.state === UpdateManager.ReadyToInstall
+                 Layout.fillWidth: true
+                 spacing: AppTheme.spacing8
+                 Label {
+@@ -569,7 +609,7 @@ ColumnLayout {
+             // Installing (indeterminate)
+             RowLayout {
+                 objectName: "updateInstallingBlock"
+-                visible: root.um && root.um.state === UpdateManager.Installing
++                visible: !root.checksDisabledByPolicy && root.um && root.um.state === UpdateManager.Installing
+                 spacing: AppTheme.spacing8
+                 AppProgressBar {
+                     indeterminate: true
+@@ -588,7 +628,7 @@ ColumnLayout {
+             // next quit.
+             ColumnLayout {
+                 objectName: "updateRestartRequiredBlock"
+-                visible: root.um && root.um.state === UpdateManager.RestartRequired
++                visible: !root.checksDisabledByPolicy && root.um && root.um.state === UpdateManager.RestartRequired
+                 Layout.fillWidth: true
+                 spacing: AppTheme.spacing8
+                 Label {
+@@ -682,7 +722,7 @@ ColumnLayout {
+             // leave a heading over nothing.
+             Label {
+                 objectName: "updateFailureDismissedNote"
+-                visible: root.um && root.um.state === UpdateManager.Failed
++                visible: !root.checksDisabledByPolicy && root.um && root.um.state === UpdateManager.Failed
+                          && root.failureDismissed
+                 Layout.fillWidth: true
+                 wrapMode: Text.WordWrap
+@@ -691,10 +731,14 @@ ColumnLayout {
+                 text: qsTr("The last check failed. Use Check for updates to try again.")
+             }
+ 
+-            // Failed: terminal, no bypass of any kind
++            // Failed: terminal, no bypass of any kind. Snap: the
++            // automatic startup timer still flips the backend to Failed (see
++            // UpdateManager::startCheck()), silently and harmlessly, so this
++            // stays gated rather than ever showing that as an alarming error
++            // banner the user never asked to see.
+             ColumnLayout {
+                 objectName: "updateFailedBlock"
+-                visible: root.um && root.um.state === UpdateManager.Failed
++                visible: !root.checksDisabledByPolicy && root.um && root.um.state === UpdateManager.Failed
+                          && !root.failureDismissed
+                 Layout.fillWidth: true
+                 spacing: AppTheme.spacing8
+Index: lightning-0.10.1/src/update/UpdateManager.h
+===================================================================
+--- lightning-0.10.1.orig/src/update/UpdateManager.h
++++ lightning-0.10.1/src/update/UpdateManager.h
+@@ -72,6 +72,10 @@ class UpdateManager : public QObject
+     // administrator approval, so the UI can say so beforehand.
+     Q_PROPERTY(bool installNeedsAdministrator READ installNeedsAdministrator
+                    NOTIFY installTypeChanged)
++    // Snap: true always in this build (see startCheck()). The UI
++    // replaces the toggle, the check button and any check-result state with
++    // a fixed notice instead of letting them run and fail every time.
++    Q_PROPERTY(bool checksDisabledByPolicy READ checksDisabledByPolicy CONSTANT)
+     Q_PROPERTY(bool automaticChecksEnabled READ automaticChecksEnabled WRITE
+                    setAutomaticChecksEnabled NOTIFY automaticChecksEnabledChanged)
+     Q_PROPERTY(QDateTime lastCheckTime READ lastCheckTime NOTIFY lastCheckTimeChanged)
+@@ -144,6 +148,9 @@ public:
+         return lightning::update::packageManagerName(m_detection.type);
+     }
+     bool installNeedsAdministrator() const;
++    // Kept as a real getter (not inlined `true`) so it reads from the same
++    // place startCheck() refuses from, if that ever becomes conditional.
++    bool checksDisabledByPolicy() const;
+     bool automaticChecksEnabled() const { return m_automaticChecksEnabled; }
+     void setAutomaticChecksEnabled(bool enabled);
+     QDateTime lastCheckTime() const { return m_lastCheckTime; }

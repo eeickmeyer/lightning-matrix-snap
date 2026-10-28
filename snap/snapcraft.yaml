@@ -78,8 +78,8 @@ parts:
     source: https://github.com/Mizerd/lightning.git
     source-type: git
     # Bump this to follow a new upstream release; adopt-info derives the snap
-    # version from it.
-    source-tag: v0.10.1
+    # version from it. The update patch below is written against 0.10.2.
+    source-tag: v0.10.2
     build-packages:
       - cargo
       - cmake
@@ -91,6 +91,7 @@ parts:
       - libsecret-1-dev
       - libssl-dev
       - ninja-build
+      - patch
       - patchelf
       - pkgconf
       - qt6-base-dev
@@ -104,9 +105,18 @@ parts:
       - rustc
       - zlib1g-dev
     override-pull: |
+      set -eu
       craftctl default
       tag="$(git describe --tags --abbrev=0)"
       craftctl set version="${tag#v}"
+
+      # snapd owns updates. The in-app updater must never contact an upstream
+      # server or offer to replace the snap's files, so its single check
+      # chokepoint is refused and the Updates settings show a notice instead.
+      # Failing loudly here when a new tag no longer matches is intended.
+      for p in "${CRAFT_PROJECT_DIR}"/snap/local/patches/*.patch; do
+        patch -p1 --forward < "${p}"
+      done
     override-build: |
       set -eu
       build_dir="${CRAFT_PART_BUILD}/build-snap"
@@ -123,7 +133,8 @@ parts:
       # into a configure error instead of a silently reduced build. No GIF
       # provider keys are embedded; the GIF picker reads them from
       # LIGHTNING_GIPHY_API_KEY / LIGHTNING_KLIPY_API_KEY and is otherwise
-      # unconfigured. The update helper defers to snapd for linux-snap.
+      # unconfigured. Updates come from snapd (see the patch in override-pull),
+      # so no update signing key is compiled in.
       cmake -S . -B "${build_dir}" -G Ninja \
         -DCMAKE_BUILD_TYPE=Release \
         -DCMAKE_INSTALL_PREFIX=/usr \
@@ -137,8 +148,7 @@ parts:
         -DLIGHTNING_ENABLE_RNNOISE=OFF \
         -DLIGHTNING_DISABLE_CCACHE=ON \
         -DLIGHTNING_ARTIFACT_KIND=release \
-        -DLIGHTNING_INSTALL_TYPE=linux-snap \
-        -DLIGHTNING_UPDATE_PUBKEY_2026A=pnNX0yQfhr66fpbMJ89MCNWkHVtfAr+WwI9c4OHzz50=
+        -DLIGHTNING_INSTALL_TYPE=linux-snap
       cmake --build "${build_dir}" --parallel "${CRAFT_PARALLEL_BUILD_COUNT}"
       DESTDIR="${CRAFT_PART_INSTALL}" cmake --install "${build_dir}"
 
