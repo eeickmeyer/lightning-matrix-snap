@@ -125,6 +125,12 @@ parts:
     # Bump this to follow a new upstream release; adopt-info derives the snap
     # version from it. The update patch below is written against 0.10.2.
     source-tag: v0.10.2
+    # Application keys for the GIF picker, the same ones the Debian package and
+    # the Flathub manifest embed. cmake/GenerateGifBuildKeys.cmake writes them
+    # to a build-tree header only; they are not passed on any command line.
+    build-environment:
+      - LIGHTNING_BUILD_GIPHY_API_KEY: "cAOuVhjN4BI5vtH3iYuWpgKewsME80MF"
+      - LIGHTNING_BUILD_KLIPY_API_KEY: "sYbUpgwUKt4tAZj8LFPoUPEDVzJxYtqO2PA4LcF1kO7pFYELZD60OvdkcxstuPxa"
     build-packages:
       - cargo
       - cmake
@@ -174,12 +180,10 @@ parts:
 
       # DeepFilterNet and RNNoise are off because their model weights carry no
       # explicit licence (the Debian package disables them for the same
-      # reason). The WebRTC and Qt SVG requirements turn a missing dependency
-      # into a configure error instead of a silently reduced build. No GIF
-      # provider keys are embedded; the GIF picker reads them from
-      # LIGHTNING_GIPHY_API_KEY / LIGHTNING_KLIPY_API_KEY and is otherwise
-      # unconfigured. Updates come from snapd (see the patch in override-pull),
-      # so no update signing key is compiled in.
+      # reason). The WebRTC, Qt SVG and GIF key requirements turn a missing
+      # dependency or key into a configure error instead of a silently reduced
+      # build. Updates come from snapd (see the patch in override-pull), so no
+      # update signing key is compiled in.
       cmake -S . -B "${build_dir}" -G Ninja \
         -DCMAKE_BUILD_TYPE=Release \
         -DCMAKE_INSTALL_PREFIX=/usr \
@@ -189,6 +193,7 @@ parts:
         -DLIGHTNING_ENABLE_WEBRTC=ON \
         -DLIGHTNING_REQUIRE_WEBRTC=ON \
         -DLIGHTNING_REQUIRE_QT_SVG=ON \
+        -DLIGHTNING_REQUIRE_GIF_KEYS=ON \
         -DLIGHTNING_ENABLE_DEEPFILTERNET=OFF \
         -DLIGHTNING_ENABLE_RNNOISE=OFF \
         -DLIGHTNING_DISABLE_CCACHE=ON \
@@ -211,6 +216,11 @@ parts:
       media="$(timeout 60 "${staged}" --call-media-status 2>&1 || true)"
       printf '%s\n' "${media}"
       printf '%s\n' "${media}" | grep -qx 'call media engine built in: yes'
+      gif="$(env -u LIGHTNING_GIPHY_API_KEY -u LIGHTNING_KLIPY_API_KEY \
+        -u LIGHTNING_GIF_ENV_FILE "${staged}" --gif-status)"
+      printf '%s\n' "${gif}"
+      printf '%s\n' "${gif}" | grep -q 'GIPHY configured: yes'
+      printf '%s\n' "${gif}" | grep -q 'KLIPY configured: yes'
 
       # The libraries come from stage-packages, never from the build tree.
       patchelf --remove-rpath "${CRAFT_PART_INSTALL}/usr/bin/lightning-matrix"

@@ -42,13 +42,13 @@ dependencies, mirror `Build-Depends` and `Depends` from upstream's
 
 ## Choices worth knowing
 
-- **No GIF provider keys.** Upstream's Flatpak and Debian builds embed the
-  application keys at build time. This snap does not; the GIF picker reads
-  `LIGHTNING_GIPHY_API_KEY` / `LIGHTNING_KLIPY_API_KEY` from the environment
-  and is otherwise unconfigured. To embed them, export
-  `LIGHTNING_BUILD_GIPHY_API_KEY` / `LIGHTNING_BUILD_KLIPY_API_KEY` in the
-  `lightning` part's `override-build` and pass
-  `-DLIGHTNING_REQUIRE_GIF_KEYS=ON`.
+- **GIF provider keys are embedded**, as in upstream's Flatpak and Debian
+  builds. The GIPHY and KLIPY application keys are set through
+  `build-environment` on the `lightning` part and the build passes
+  `-DLIGHTNING_REQUIRE_GIF_KEYS=ON`, so a missing key fails the configure step.
+  A key compiled into a distributed binary is extractable; these are provider
+  application keys, not Matrix credentials. `LIGHTNING_GIPHY_API_KEY` /
+  `LIGHTNING_KLIPY_API_KEY` in the environment still override them.
 - **DeepFilterNet and RNNoise noise suppression are off**, as in the Debian
   package: their model weights carry no explicit licence.
 - **Qt's SVG image plugin is excluded.** Lightning must never decode untrusted
