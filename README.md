@@ -61,8 +61,8 @@ dependencies, mirror `Build-Depends` and `Depends` from upstream's
   contacts an upstream update server or offers to replace the snap's files, and
   the Updates settings page shows a notice pointing at `snap refresh`. It is
   applied in `override-pull`, so a tag it no longer fits fails the build; rebase
-  it when bumping `source-tag`. It is written against 0.10.2 and does not apply
-  to v0.10.1. No update signing key is compiled in.
+  it when bumping `source-tag`. It is currently rebased against v0.10.6. No
+  update signing key is compiled in.
 - `snap/local/check-payload` fails the build when a runtime-only dependency
   (Qt plugins, GStreamer call plugins, NSS modules, PipeWire client files,
   dictionaries) is missing from the payload, since a strictly confined snap
