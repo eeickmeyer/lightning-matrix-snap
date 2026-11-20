@@ -124,7 +124,7 @@ parts:
     source-type: git
     # Bump this to follow a new upstream release; adopt-info derives the snap
     # version from it. The update patch below is written against 0.10.2.
-    source-tag: v0.10.2
+    source-tag: v0.10.6
     # Application keys for the GIF picker, the same ones the Debian package and
     # the Flathub manifest embed. cmake/GenerateGifBuildKeys.cmake writes them
     # to a build-tree header only; they are not passed on any command line.
