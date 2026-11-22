@@ -25,7 +25,9 @@ forbid() {
 }
 
 need usr/bin/lightning-matrix "the application"
-need usr/bin/lightning-updater "the update helper"
+forbid usr/bin/lightning-updater "the in-app updater is disabled for this snap"
+need libxcb.so.1 "single-window sharing on X11"
+need libxcb-composite.so.0 "single-window sharing on X11"
 
 # Qt platform and plugin set. The portal theme matters most: without it Qt
 # Quick's own file dialog runs and confinement shows it an empty home.

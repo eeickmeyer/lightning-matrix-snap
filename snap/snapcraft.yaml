@@ -123,8 +123,8 @@ parts:
     source: https://github.com/Mizerd/lightning.git
     source-type: git
     # Bump this to follow a new upstream release; adopt-info derives the snap
-    # version from it. The update patch below is rebased against 0.10.6.
-    source-tag: v0.10.6
+    # version from it.
+    source-tag: v0.10.7
     # Application keys for the GIF picker, the same ones the Debian package and
     # the Flathub manifest embed. cmake/GenerateGifBuildKeys.cmake writes them
     # to a build-tree header only; they are not passed on any command line.
@@ -139,10 +139,10 @@ parts:
       - libgstreamer-plugins-bad1.0-dev
       - libgstreamer-plugins-base1.0-dev
       - libgstreamer1.0-dev
+      - libxcb1-dev
       - libsecret-1-dev
       - libssl-dev
       - ninja-build
-      - patch
       - patchelf
       - pkgconf
       - qt6-base-dev
@@ -160,14 +160,6 @@ parts:
       craftctl default
       tag="$(git describe --tags --abbrev=0)"
       craftctl set version="${tag#v}"
-
-      # snapd owns updates. The in-app updater must never contact an upstream
-      # server or offer to replace the snap's files, so its single check
-      # chokepoint is refused and the Updates settings show a notice instead.
-      # Failing loudly here when a new tag no longer matches is intended.
-      for p in "${CRAFT_PROJECT_DIR}"/snap/local/patches/*.patch; do
-        patch -p1 --forward < "${p}"
-      done
     override-build: |
       set -eu
       build_dir="${CRAFT_PART_BUILD}/build-snap"
@@ -182,8 +174,7 @@ parts:
       # explicit licence (the Debian package disables them for the same
       # reason). The WebRTC, Qt SVG and GIF key requirements turn a missing
       # dependency or key into a configure error instead of a silently reduced
-      # build. Updates come from snapd (see the patch in override-pull), so no
-      # update signing key is compiled in.
+      # build. Snap updates come from snapd, so compile out the in-app updater.
       cmake -S . -B "${build_dir}" -G Ninja \
         -DCMAKE_BUILD_TYPE=Release \
         -DCMAKE_INSTALL_PREFIX=/usr \
@@ -197,6 +188,7 @@ parts:
         -DLIGHTNING_ENABLE_DEEPFILTERNET=OFF \
         -DLIGHTNING_ENABLE_RNNOISE=OFF \
         -DLIGHTNING_DISABLE_CCACHE=ON \
+        -DLIGHTNING_ENABLE_UPDATER=OFF \
         -DLIGHTNING_ARTIFACT_KIND=release \
         -DLIGHTNING_INSTALL_TYPE=linux-snap
       cmake --build "${build_dir}" --parallel "${CRAFT_PARALLEL_BUILD_COUNT}"
@@ -224,7 +216,6 @@ parts:
 
       # The libraries come from stage-packages, never from the build tree.
       patchelf --remove-rpath "${CRAFT_PART_INSTALL}/usr/bin/lightning-matrix"
-      patchelf --remove-rpath "${CRAFT_PART_INSTALL}/usr/bin/lightning-updater"
 
       install -Dm0644 LICENSE \
         "${CRAFT_PART_INSTALL}/usr/share/doc/lightning-matrix/LICENSE"
@@ -252,6 +243,10 @@ parts:
       - qt6-image-formats-plugins
       - qt6-wayland
       - qt6-xdgdesktopportal-platformtheme
+      # Single-window X11 sharing dlopens these libraries; without them,
+      # Lightning still supports whole-display sharing through the portal.
+      - libxcb1
+      - libxcb-composite0
       # Voice calls, screen sharing and the camera.
       - gstreamer1.0-alsa
       - gstreamer1.0-gl

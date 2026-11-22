@@ -38,7 +38,7 @@ draw call video. Run it from a terminal to see the hint.
 
 Change `source-tag` in `snap/snapcraft.yaml`. If a release adds build
 dependencies, mirror `Build-Depends` and `Depends` from upstream's
-`debian/control`, and check that the update patch still applies.
+`debian/control`, and confirm that the snap's CMake options remain supported.
 
 ## Choices worth knowing
 
@@ -55,15 +55,15 @@ dependencies, mirror `Build-Depends` and `Depends` from upstream's
   SVG.
 - **The MPRIS slot is named `lightning`**, because that is the bus name the
   application owns and it differs from the snap name.
-- **Updates come from snapd only.** `snap/local/patches/0001-update-disable-network-checks.patch`
-  (adapted from the Debian package's `0003-update-disable-network-checks.patch`)
-  makes `UpdateManager::startCheck()` refuse unconditionally, so the app never
-  contacts an upstream update server or offers to replace the snap's files, and
-  the Updates settings page shows a notice pointing at `snap refresh`. It is
-  applied in `override-pull`, so a tag it no longer fits fails the build; rebase
-  it when bumping `source-tag`. It is currently rebased against v0.10.6. No
-  update signing key is compiled in.
+- **Updates come from snapd only.** The build passes
+  `-DLIGHTNING_ENABLE_UPDATER=OFF`, so the in-app updater and its helper are
+  not built or installed. The Updates settings page says updates are handled
+  by the package manager; use your software centre or run `snap refresh`.
+- **X11 single-window sharing needs `libxcb` and `libxcb-composite`.** These
+  runtime libraries are staged in the snap; whole-display sharing remains
+  available through the portal if they are unavailable.
 - `snap/local/check-payload` fails the build when a runtime-only dependency
   (Qt plugins, GStreamer call plugins, NSS modules, PipeWire client files,
-  dictionaries) is missing from the payload, since a strictly confined snap
-  cannot see the build host's copies.
+  dictionaries) is missing from the payload, or if the disabled updater helper
+  unexpectedly appears. A strictly confined snap cannot see the build host's
+  copies.
