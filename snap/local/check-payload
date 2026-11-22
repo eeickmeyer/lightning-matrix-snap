@@ -26,7 +26,8 @@ forbid() {
 
 need usr/bin/lightning-matrix "the application"
 forbid usr/bin/lightning-updater "the in-app updater is disabled for this snap"
-need libxcb.so.1 "single-window sharing on X11"
+# libxcb.so.1 is supplied by the gpu-2604 content provider and removed from
+# the snap payload by gpu-2604-cleanup to avoid shipping duplicate libraries.
 need libxcb-composite.so.0 "single-window sharing on X11"
 
 # Qt platform and plugin set. The portal theme matters most: without it Qt

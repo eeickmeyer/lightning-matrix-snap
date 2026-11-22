@@ -243,8 +243,9 @@ parts:
       - qt6-image-formats-plugins
       - qt6-wayland
       - qt6-xdgdesktopportal-platformtheme
-      # Single-window X11 sharing dlopens these libraries; without them,
-      # Lightning still supports whole-display sharing through the portal.
+      # Single-window X11 sharing dlopens libxcb-composite; libxcb1 itself is
+      # supplied by the gpu-2604 content provider and deduplicated at prime
+      # time. Whole-display sharing remains available through the portal.
       - libxcb1
       - libxcb-composite0
       # Voice calls, screen sharing and the camera.

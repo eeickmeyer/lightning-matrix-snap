@@ -59,8 +59,9 @@ dependencies, mirror `Build-Depends` and `Depends` from upstream's
   `-DLIGHTNING_ENABLE_UPDATER=OFF`, so the in-app updater and its helper are
   not built or installed. The Updates settings page says updates are handled
   by the package manager; use your software centre or run `snap refresh`.
-- **X11 single-window sharing needs `libxcb` and `libxcb-composite`.** These
-  runtime libraries are staged in the snap; whole-display sharing remains
+- **X11 single-window sharing uses `libxcb` and `libxcb-composite`.**
+  `libxcb` comes from the connected `gpu-2604` graphics provider,
+  `libxcb-composite` is staged in the snap, and whole-display sharing remains
   available through the portal if they are unavailable.
 - `snap/local/check-payload` fails the build when a runtime-only dependency
   (Qt plugins, GStreamer call plugins, NSS modules, PipeWire client files,
